@@ -8,7 +8,7 @@ const cors = require("cors");
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "15mb" }));
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
@@ -60,32 +60,52 @@ app.post("/api/chat", async (req, res) => {
       search: "You are Ocean AI. Search the web to answer this query and cite your sources.",
       news: "You are Ocean AI. Summarize the latest news on this topic in a short list of headlines with 1-2 sentence summaries each.",
       code: "You are Ocean AI. Write clean, well-commented, working code. Specify the language and briefly explain what it does.",
+      math: "You are Ocean AI. For ANY arithmetic or calculation in this message, you MUST use the code execution tool to compute the exact answer — never compute large sums or arithmetic mentally or by estimation. Always write and run real code to get the precise result, then state it clearly.",
     };
-    const systemText = systemInstructions[mode] || systemInstructions.chat;
 
-    // Gemini expects roles "user" and "model" (not "assistant")
-    const contents = messages.map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
+    // Heuristic: if the latest message looks like arithmetic/calculation,
+    // force code execution and a math-specific system prompt — guarantees
+    // a real computed answer instead of the model guessing at large sums.
+    const lastUserMsg = messages[messages.length - 1]?.content || "";
+    const looksLikeMath = /[\d][\d,.\s]*[\+\-\*\/×÷][\d,.\s+\-*/×÷]*[\d]/.test(lastUserMsg);
+
+    const effectiveMode = looksLikeMath ? "math" : mode;
+    const systemText = systemInstructions[effectiveMode] || systemInstructions.chat;
+
+    // Gemini expects roles "user" and "model" (not "assistant").
+    // Each message can optionally include a file: { mimeType, data }
+    // where data is base64 (no data: prefix) — used for images/PDFs/docs.
+    // File part goes before text, per Google's guidance for best results.
+    const contents = messages.map((m) => {
+      const parts = [];
+      if (m.file && m.file.data && m.file.mimeType) {
+        parts.push({
+          inlineData: { mimeType: m.file.mimeType, data: m.file.data },
+        });
+      }
+      if (m.content) parts.push({ text: m.content });
+      return {
+        role: m.role === "assistant" ? "model" : "user",
+        parts,
+      };
+    });
 
     const body = {
       contents,
       systemInstruction: { parts: [{ text: systemText }] },
     };
 
-    // Heuristic: if the latest message looks like arithmetic/calculation,
-    // use code execution instead of search — guarantees a real computed
-    // answer instead of the model guessing at large sums.
-    const lastUserMsg = messages[messages.length - 1]?.content || "";
-    const looksLikeMath = /[\d][\d,.\s]*[\+\-\*\/×÷][\d,.\s+\-*/×÷]*[\d]/.test(lastUserMsg);
+    // Skip tools when a file is attached — analyzing the file is the
+    // priority, and combining file input with search/code-execution
+    // tools in one call can behave unpredictably.
+    const hasFile = !!(messages[messages.length - 1]?.file);
 
-    if (looksLikeMath) {
-      body.tools = [{ codeExecution: {} }];
-    } else if (mode === "code") {
-      body.tools = [{ codeExecution: {} }];
-    } else if (mode === "chat" || mode === "search" || mode === "news") {
-      body.tools = [{ googleSearch: {} }];
+    if (!hasFile) {
+      if (looksLikeMath || mode === "code") {
+        body.tools = [{ codeExecution: {} }];
+      } else if (mode === "chat" || mode === "search" || mode === "news") {
+        body.tools = [{ googleSearch: {} }];
+      }
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GOOGLE_API_KEY}`;
