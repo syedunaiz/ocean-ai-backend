@@ -18,7 +18,7 @@ if (!GOOGLE_API_KEY) {
   );
 }
 
-const GEMINI_MODEL = "gemini-3-flash";
+const GEMINI_MODEL = "gemini-3.5-flash";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
 
 // Simple health check so you can confirm the server is alive
