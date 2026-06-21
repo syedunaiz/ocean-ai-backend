@@ -19,7 +19,7 @@ if (!GOOGLE_API_KEY) {
 }
 
 const GEMINI_MODEL = "gemini-2.5-flash";
-const IMAGE_MODEL = "gemini-2.5-flash-image";
+const IMAGE_MODEL = "gemini-3.1-flash-image";
 
 // Simple health check so you can confirm the server is alive
 app.get("/", (req, res) => {
@@ -136,6 +136,16 @@ app.post("/api/image", async (req, res) => {
 
     if (!response.ok) {
       const message = data?.error?.message || `HTTP ${response.status}`;
+      if (response.status === 429 && /limit:\s*0/i.test(message)) {
+        return res.status(403).json({
+          error: "This image model has no free quota on this API key. A different model is needed, or billing must be enabled.",
+        });
+      }
+      if (response.status === 429) {
+        return res.status(429).json({
+          error: "Image rate limit hit — wait about a minute before generating another image.",
+        });
+      }
       return res.status(response.status).json({ error: message });
     }
 
