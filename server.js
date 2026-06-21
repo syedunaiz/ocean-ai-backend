@@ -26,6 +26,27 @@ app.get("/", (req, res) => {
   res.json({ status: "Ocean AI backend is running" });
 });
 
+// Diagnostic: lists the models YOUR key can actually use, straight from
+// Google. Visit https://YOUR-RENDER-URL.onrender.com/api/models in a
+// browser to see ground truth instead of guessing model names.
+app.get("/api/models", async (req, res) => {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${GOOGLE_API_KEY}`
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+    const usable = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+      .map((m) => m.name.replace("models/", ""));
+    res.json({ usableModels: usable });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- CHAT ----
 // Expects: { messages: [{role: "user"|"model", content: "..."}], mode: "chat"|"search"|"news"|"code" }
 app.post("/api/chat", async (req, res) => {
