@@ -74,7 +74,17 @@ app.post("/api/chat", async (req, res) => {
       systemInstruction: { parts: [{ text: systemText }] },
     };
 
-    if (mode === "chat" || mode === "search" || mode === "news") {
+    // Heuristic: if the latest message looks like arithmetic/calculation,
+    // use code execution instead of search — guarantees a real computed
+    // answer instead of the model guessing at large sums.
+    const lastUserMsg = messages[messages.length - 1]?.content || "";
+    const looksLikeMath = /[\d][\d,.\s]*[\+\-\*\/×÷][\d,.\s+\-*/×÷]*[\d]/.test(lastUserMsg);
+
+    if (looksLikeMath) {
+      body.tools = [{ codeExecution: {} }];
+    } else if (mode === "code") {
+      body.tools = [{ codeExecution: {} }];
+    } else if (mode === "chat" || mode === "search" || mode === "news") {
       body.tools = [{ googleSearch: {} }];
     }
 
@@ -98,9 +108,16 @@ app.post("/api/chat", async (req, res) => {
       return res.status(response.status).json({ error: message });
     }
 
-    const text =
-      data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n") ||
-      "No response — try again.";
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const text = parts
+      .map((p) => {
+        if (p.text) return p.text;
+        if (p.executableCode) return "\n```python\n" + p.executableCode.code + "\n```\n";
+        if (p.codeExecutionResult) return "**Result:** " + p.codeExecutionResult.output;
+        return "";
+      })
+      .join("\n")
+      .trim() || "No response — try again.";
 
     res.json({ reply: text });
   } catch (err) {
