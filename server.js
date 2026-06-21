@@ -18,7 +18,7 @@ if (!GOOGLE_API_KEY) {
   );
 }
 
-const GEMINI_MODEL = "gemini-3.5-flash";
+const GEMINI_MODEL = "gemini-2.5-flash";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
 
 // Simple health check so you can confirm the server is alive
@@ -91,6 +91,11 @@ app.post("/api/chat", async (req, res) => {
 
     if (!response.ok) {
       const message = data?.error?.message || `HTTP ${response.status}`;
+      if (response.status === 429) {
+        return res.status(429).json({
+          error: "Rate limit hit — wait about a minute before sending another message.",
+        });
+      }
       return res.status(response.status).json({ error: message });
     }
 
@@ -159,15 +164,17 @@ app.post("/api/image", async (req, res) => {
   }
 });
 
-// Retries on 429 (rate limit) or 503 (overloaded) with short backoff
+// Retries on 503 (temporarily overloaded) only. Deliberately does NOT
+// retry on 429 (rate limit) — retrying a rate-limited request just adds
+// to the count and makes the limit worse, not better.
 async function fetchWithRetry(url, opts, maxRetries = 2) {
   let lastErr;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const response = await fetch(url, opts);
-    if (response.status === 429 || response.status === 503) {
+    if (response.status === 503) {
       lastErr = response;
       if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
         continue;
       }
       return response;
