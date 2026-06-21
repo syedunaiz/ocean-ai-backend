@@ -19,7 +19,6 @@ if (!GOOGLE_API_KEY) {
 }
 
 const GEMINI_MODEL = "gemini-2.5-flash";
-const IMAGE_MODEL = "gemini-3.1-flash-image";
 
 // Simple health check so you can confirm the server is alive
 app.get("/", (req, res) => {
@@ -112,9 +111,9 @@ app.post("/api/chat", async (req, res) => {
 
 // ---- IMAGE GENERATION ----
 // Expects: { prompt: "description of the image" }
-// Note: Google's older Imagen API is being phased out — this uses
-// Gemini's built-in image generation model instead, which is the
-// currently recommended path (sometimes called "Nano Banana").
+// Uses pollinations.ai — a free, no-login image generator. Honest
+// tradeoff: it's $0 but has no uptime guarantee and can go down without
+// warning. Google's paid image API is more reliable if this matters later.
 app.post("/api/image", async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -122,52 +121,41 @@ app.post("/api/image", async (req, res) => {
       return res.status(400).json({ error: "prompt is required" });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GOOGLE_API_KEY}`;
-
-    const response = await fetchWithRetry(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      const message = data?.error?.message || `HTTP ${response.status}`;
-      if (response.status === 429 && /limit:\s*0/i.test(message)) {
-        return res.status(403).json({
-          error: "This image model has no free quota on this API key. A different model is needed, or billing must be enabled.",
-        });
-      }
-      if (response.status === 429) {
-        return res.status(429).json({
-          error: "Image rate limit hit — wait about a minute before generating another image.",
-        });
-      }
-      return res.status(response.status).json({ error: message });
+    // Ask Gemini (text, which IS free and working) to expand the prompt
+    // into a richer description, improving output quality.
+    let enrichedPrompt = prompt;
+    try {
+      const promptUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GOOGLE_API_KEY}`;
+      const promptRes = await fetch(promptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          systemInstruction: {
+            parts: [{
+              text: "You are an image prompt expert. Output ONLY a vivid, highly detailed image generation prompt (60-100 words) describing composition, lighting, color, and style. No explanation, no preamble.",
+            }],
+          },
+        }),
+      });
+      const promptData = await promptRes.json();
+      const text = promptData?.candidates?.[0]?.content?.parts
+        ?.map((p) => p.text || "").join("").trim();
+      if (text) enrichedPrompt = text;
+    } catch (e) {
+      // If prompt enrichment fails, fall back to the raw prompt — not fatal.
+      console.error("Prompt enrichment failed, using raw prompt:", e.message);
     }
 
-    // Image model returns inline image data inside the response parts
-    const candidate = data?.candidates?.[0];
-    const parts = candidate?.content?.parts || [];
-    const images = parts
-      .filter((p) => p.inlineData && p.inlineData.data)
-      .map((p) => `data:${p.inlineData.mimeType || "image/png"};base64,${p.inlineData.data}`);
+    const qualityTags = ", highly detailed, sharp focus, professional, 8k";
+    const fullPrompt = enrichedPrompt + qualityTags;
+    const seeds = [42, 137];
+    const images = seeds.map(
+      (s) =>
+        `https://image.pollinations.ai/prompt/${encodeURIComponent(fullPrompt)}?width=1024&height=1024&seed=${s}&nologo=true&enhance=true`
+    );
 
-    if (images.length === 0) {
-      // finishReason "SAFETY" (or similar) means the request was
-      // intentionally blocked by content policy, not a technical failure.
-      if (candidate?.finishReason && candidate.finishReason !== "STOP") {
-        return res.status(422).json({
-          error: "This request couldn't be generated due to content guidelines. Try a different description.",
-        });
-      }
-      return res.status(502).json({ error: "No images returned — try a different prompt." });
-    }
-
-    res.json({ images });
+    res.json({ images, promptUsed: enrichedPrompt });
   } catch (err) {
     console.error("Image error:", err);
     res.status(500).json({ error: err.message || "Internal server error" });
