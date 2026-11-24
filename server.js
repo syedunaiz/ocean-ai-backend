@@ -112,9 +112,10 @@ Adapt explanations to the user's skill level.`,
     const data = await response.json();
 
     if (!response.ok) {
-      const message = data?.error?.message || `HTTP ${response.status}`;
-      return res.status(response.status).json({ error: message });
-    }
+  console.error("Gemini API Error:", response.status, data);
+  const message = data?.error?.message || `HTTP ${response.status}`;
+  return res.status(response.status).json({ error: message });
+}
 
     const text =
       data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n") ||
